@@ -246,8 +246,8 @@ async fn connection_loop(mut broker: Sender<MessageEvent>, stream: TcpStream) ->
 }
 
 /** IDK about you but I bet this runs the server (similar to main... maybe?) */
-pub fn run() -> Result<()> {
+pub fn run(network: String) -> Result<()> {
     println!("Server Starting...");
-    let fut = accept_loop("127.0.0.1:8080"); // TODO: make this a config
+    let fut = accept_loop(network);
     task::block_on(fut)
 }

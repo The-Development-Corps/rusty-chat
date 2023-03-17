@@ -10,8 +10,8 @@ use futures::{select, FutureExt};
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /** I bet this runs the client code */
-pub fn run() -> Result<()> {
-    task::block_on(client_loop("127.0.0.1:8080"))
+pub fn run(address: String) -> Result<()> {
+    task::block_on(client_loop(address))
 }
 
 /** We do the work of parsing and sending messages here */

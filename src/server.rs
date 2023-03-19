@@ -247,7 +247,7 @@ async fn connection_loop(mut broker: Sender<MessageEvent>, stream: TcpStream) ->
 
 /** IDK about you but I bet this runs the server (similar to main... maybe?) */
 pub fn run(network: String) -> Result<()> {
-    println!("Server Starting...");
+    println!("Server Starting on {}", network);
     let fut = accept_loop(network);
     task::block_on(fut)
 }

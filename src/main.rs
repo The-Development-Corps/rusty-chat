@@ -6,7 +6,7 @@ use clap::Parser;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[derive(Debug, Default, Parser)]
-#[command(author = "Chris Conlon", version, about)]
+#[command(author, version, about="A super simple chat server / client")]
 struct Args {
     /// The run mode of the application
     #[arg(help_heading = "Arguments", value_name = "client|server", short, long)]
@@ -17,7 +17,7 @@ struct Args {
     port: String,
 
     /// Host
-    #[arg(help_heading = "Arguments", short = 'a', long = "address")]
+    #[arg(help_heading = "Arguments", short = 'a', long = "Host address")]
     host: String,
 }
 

@@ -5,7 +5,7 @@ use clap::Parser;
 // My understanding here is that this creates an alias for the right hand side to the left hand
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
-#[derive(Debug, Default, Parser)]
+#[derive(Debug, Parser)]
 #[command(author, version, about="A super simple chat server / client")]
 struct Args {
     /// The run mode of the application

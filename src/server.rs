@@ -19,8 +19,10 @@ enum Void {}
 
 #[derive(Debug)]
 enum MessageEvent {
+// TODO: Add a system message type and function to call from anywhere (may be non needed as global seems to do this already)
     CommandRequest {
         from: String,
+        cmd: String,
     },
     DirectMessage {
         from: String,
@@ -38,10 +40,9 @@ enum MessageEvent {
     },
 }
 
-// FIXME: Currently only used if sending on NewPeer but should be used for ALL sends (this is the clean way!)
 /**
- * 5.1: Helper to send messages out based on the message type 
- * This function is in charge of sending messages based on a new connection or existing 
+ * 5.1: Helper to send messages out based on the message type
+ * This function is in charge of sending messages out to clients
  */
 async fn writer_loop(
     messages: &mut Receiver<String>,
@@ -73,7 +74,7 @@ async fn writer_loop(
  * (Helps to support graceful shutdown)
  */
 async fn broker_loop(events: Receiver<MessageEvent>) {
-    let (disconnect_sender, mut disconnect_receiver) = 
+    let (disconnect_sender, mut disconnect_receiver) =
         mpsc::unbounded::<(String, Receiver<String>)>();
     let mut peers: HashMap<String, Sender<String>> = HashMap::new();
     let mut events = events.fuse();
@@ -123,7 +124,7 @@ async fn broker_loop(events: Receiver<MessageEvent>) {
                 stream,
                 shutdown,
             } => {
-                let s: String = format!("Welcome {name} to the chat!\n");
+                let s: String = format!("System Message: {name} joined!\n");
                 for send_handler in peers.values_mut() {
                     send_handler.send(s.clone()).await.unwrap();
                 }
@@ -134,9 +135,7 @@ async fn broker_loop(events: Receiver<MessageEvent>) {
                         entry.insert(client_sender);
                         let mut disconnect_sender = disconnect_sender.clone();
                         spawn_and_log_error(async move {
-                            let res =
-                                writer_loop(&mut client_receiver, stream, shutdown)
-                                    .await;
+                            let res = writer_loop(&mut client_receiver, stream, shutdown).await;
                             disconnect_sender
                                 .send((name, client_receiver))
                                 .await // 4
@@ -146,14 +145,18 @@ async fn broker_loop(events: Receiver<MessageEvent>) {
                     }
                 }
             }
-            MessageEvent::CommandRequest { from } => {
-                let mut online_users: String = String::from("");
-                for peer in peers.keys() {
-                    let x = format!("{peer}\n");
-                    online_users.push_str(&x);
-                }
-                if let Some(peer) = peers.get_mut(&from) {
-                    peer.send(online_users).await.unwrap()
+            MessageEvent::CommandRequest { from, cmd } => {
+                if cmd == "online" {
+                    let mut online_users: String = String::from("Currently Online Users: [");
+                    for peer in peers.keys() {
+                        let x = format!("{peer}, ");
+                        online_users.push_str(&x);
+                    }
+                    online_users =
+                        format!("{}]\n", online_users[0..online_users.len() - 2].to_string());
+                    if let Some(peer) = peers.get_mut(&from) {
+                        peer.send(online_users).await.unwrap()
+                    }
                 }
             }
         }
@@ -167,17 +170,19 @@ async fn broker_loop(events: Receiver<MessageEvent>) {
 
 /** 4: Server Work - Handles messages in / out. Each client connected will have its own thread running this loop for them. */
 async fn connection_loop(mut broker: Sender<MessageEvent>, stream: TcpStream) -> Result<()> {
+    // TODO: Make it so the client sends event codes that we understands to match MessageEvent Enums
     let stream = Arc::new(stream);
     let reader = BufReader::new(&*stream);
     let mut lines = reader.lines();
+    let (_shutdown_sender, shutdown_receiver) = mpsc::unbounded::<Void>(); // handler for when shutdown occurs
 
     // Initial message shoud be the name they want to be ID'd as
     let name = match lines.next().await {
+        // TODO: How do we stop a user form using certain names: [admin, system, etc...]
         None => Err("peer disconnected immediately")?,
         Some(line) => line?,
     };
-    let (_shutdown_sender, shutdown_receiver) = mpsc::unbounded::<Void>(); // simple handler for when shutdown occurres
-    // The initial message that is sent needs to trigger a MessageEvent::NewPeer to do the initial work of connecting 
+    // The initial message that is sent needs to trigger a MessageEvent::NewPeer to do the initial work of connecting
     broker
         .send(MessageEvent::NewPeer {
             name: name.clone(),
@@ -187,25 +192,51 @@ async fn connection_loop(mut broker: Sender<MessageEvent>, stream: TcpStream) ->
         .await
         .unwrap();
 
+    // Send a welcome message
+    broker
+        .send(MessageEvent::DirectMessage {
+            from: "System".to_string(),
+            to: vec![name.clone()],
+            msg: format!("Welcome {}", &name),
+        })
+        .await
+        .unwrap();
+
     // Now the thread will listen for new incoming messages.
     // The allowed messages are found in the MessageEvent Enum
     while let Some(line) = lines.next().await {
+        // TODO: Make it so the client sends event codes that we understands to match MessageEvent Enums (Same as above but changes needed here)
         let line = line?;
-        // FIXME: The loop needs to probably match on a message to test if it fits a given MessageEvent (saves complexity and processing later)
         // We can do better then this but for now check the msg coming in for commands
-
-        // Got a command request (online)
-        if line == "/online" {
-            broker
-                .send(MessageEvent::CommandRequest { from: name.clone() })
+        match line.as_str() {
+            _ if line.starts_with("/") => broker
+                .send(MessageEvent::CommandRequest {
+                    from: name.clone(),
+                    cmd: line[1..].to_string(),
+                })
                 .await
-                .unwrap();
-            continue;
-        }
-        // If we find a `:` then user is considered to be sending `MessageEvent::PrivateMessage` otherwise send globally 
-        let (dest, msg) = match line.find(':') {
-            // FIXME: if we don't find : we assume global message here
-            None => {
+                .unwrap(),
+            _ if line.contains(":") => {
+                let idx = line
+                    .find(':')
+                    .expect("Failed to find `:` which should not be possible");
+                let (dest, msg) = (&line[..idx], line[idx + 1..].trim());
+                let dest: Vec<String> = dest
+                    .split(',')
+                    .map(|name| name.trim().to_string())
+                    .collect();
+                let msg: String = msg.to_string();
+                broker
+                    .send(MessageEvent::DirectMessage {
+                        from: name.clone(),
+                        to: dest,
+                        msg,
+                    })
+                    .await
+                    .unwrap();
+            }
+            _ => {
+                // FIXME: we should handle a case we do not know the command but for now assume global msg was goal
                 broker
                     .send(MessageEvent::GlobalMessage {
                         name: name.clone(),
@@ -213,24 +244,8 @@ async fn connection_loop(mut broker: Sender<MessageEvent>, stream: TcpStream) ->
                     })
                     .await
                     .unwrap();
-                continue;
             }
-            Some(idx) => (&line[..idx], line[idx + 1..].trim()),
-        };
-        // Split the message from the targeted receiver of the message
-        let dest: Vec<String> = dest
-            .split(',')
-            .map(|name| name.trim().to_string())
-            .collect();
-        let msg: String = msg.to_string();
-        broker
-            .send(MessageEvent::DirectMessage {
-                from: name.clone(),
-                to: dest,
-                msg,
-            })
-            .await
-            .unwrap();
+        }
     }
     Ok(())
 }

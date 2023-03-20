@@ -31,10 +31,11 @@ async fn client_loop(addr: impl ToSocketAddrs) -> Result<()> {
                 None => break,
             },
             // Send the outgoing lines to server
+            // TODO: Based on <Something> we should prefix an msg event code so the server knows what is coming in
             line = lines_from_stdin.next().fuse() => match line {
                 Some(line) => {
                     let line = line?;
-                    if line == "/clear" {
+                    if line == "/clear" || line.is_empty() { // TODO
                         continue;
                     }
                     writer.write_all(line.as_bytes()).await?;

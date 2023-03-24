@@ -19,7 +19,7 @@ enum Void {}
 
 #[derive(Debug)]
 enum MessageEvent {
-// TODO: Add a system message type and function to call from anywhere (may be non needed as global seems to do this already)
+    // TODO: Add a system message type and function to call from anywhere (may be non needed as global seems to do this already)
     CommandRequest {
         from: String,
         cmd: String,
@@ -178,19 +178,30 @@ async fn connection_loop(mut broker: Sender<MessageEvent>, stream: TcpStream) ->
 
     // Initial message shoud be the name they want to be ID'd as
     let name = match lines.next().await {
-        // TODO: How do we stop a user form using certain names: [admin, system, etc...]
         None => Err("peer disconnected immediately")?,
-        Some(line) => line?,
+        Some(line) => {
+            let requested_name = line.unwrap();
+            match requested_name.as_str() {
+                "admin" | "system" | "sys" | "mod" => {
+                    stream.as_ref().write_all("Please reconnect and use an appropriate name".as_bytes()).await?;
+                    return Ok(()) // manually break from function
+                }
+                _ => {
+                    // The initial message that is sent needs to trigger a MessageEvent::NewPeer to do the initial work of connecting
+                    broker
+                        .send(MessageEvent::NewPeer {
+                            name: requested_name.clone(),
+                            stream: Arc::clone(&stream),
+                            shutdown: shutdown_receiver,
+                        })
+                        .await
+                        .unwrap();
+                }
+            }
+
+            requested_name
+        }
     };
-    // The initial message that is sent needs to trigger a MessageEvent::NewPeer to do the initial work of connecting
-    broker
-        .send(MessageEvent::NewPeer {
-            name: name.clone(),
-            stream: Arc::clone(&stream),
-            shutdown: shutdown_receiver,
-        })
-        .await
-        .unwrap();
 
     // Send a welcome message
     broker

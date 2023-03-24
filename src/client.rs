@@ -35,8 +35,8 @@ async fn client_loop(addr: impl ToSocketAddrs) -> Result<()> {
             line = lines_from_stdin.next().fuse() => match line {
                 Some(line) => {
                     let line = line?;
-                    if line == "/clear" || line.is_empty() { // TODO
-                        continue;
+                    if line == "/clear" || line.is_empty() { 
+                        continue; // TODO: implment a clear client window function
                     }
                     writer.write_all(line.as_bytes()).await?;
                     writer.write_all(b"\n").await?;

@@ -19,7 +19,6 @@ enum Void {}
 
 #[derive(Debug)]
 enum MessageEvent {
-// TODO: Add a system message type and function to call from anywhere (may be non needed as global seems to do this already)
     CommandRequest {
         from: String,
         cmd: String,
@@ -112,8 +111,6 @@ async fn broker_loop(events: Receiver<MessageEvent>) {
                 for (send_to_name, send_handler) in peers.iter_mut() {
                     // Except the current client
                     if &name == send_to_name {
-                        let sent_msg: String = format!("sent {msg} to all\n");
-                        send_handler.send(sent_msg.clone()).await.unwrap();
                         continue;
                     }
                     send_handler.send(to_msg.clone()).await.unwrap();
@@ -170,80 +167,78 @@ async fn broker_loop(events: Receiver<MessageEvent>) {
 
 /** 4: Server Work - Handles messages in / out. Each client connected will have its own thread running this loop for them. */
 async fn connection_loop(mut broker: Sender<MessageEvent>, stream: TcpStream) -> Result<()> {
-    // TODO: Make it so the client sends event codes that we understands to match MessageEvent Enums
     let stream = Arc::new(stream);
     let reader = BufReader::new(&*stream);
     let mut lines = reader.lines();
     let (_shutdown_sender, shutdown_receiver) = mpsc::unbounded::<Void>(); // handler for when shutdown occurs
 
     // Initial message shoud be the name they want to be ID'd as
-    let name = match lines.next().await {
-        // TODO: How do we stop a user form using certain names: [admin, system, etc...]
+    let name: String = match lines.next().await {
         None => Err("peer disconnected immediately")?,
-        Some(line) => line?,
+        Some(line) => {
+            let requested_name = line.unwrap();
+            let parsed_line: Vec<&str> = requested_name.split("|").collect::<Vec<&str>>();
+            match parsed_line[2] {
+                "admin" | "system" | "sys" | "mod" => {
+                    stream.as_ref().write_all("Please reconnect and use an appropriate name".as_bytes()).await?;
+                    return Ok(()) // manually break from function
+                }
+                _ => {
+                    // The initial message that is sent needs to trigger a MessageEvent::NewPeer to do the initial work of connecting
+                    broker
+                        .send(MessageEvent::NewPeer {
+                            name: parsed_line[2].to_string(),
+                            stream: Arc::clone(&stream),
+                            shutdown: shutdown_receiver,
+                        })
+                        .await
+                        .unwrap();
+                }
+            }
+            parsed_line[2].to_string()
+        }
     };
-    // The initial message that is sent needs to trigger a MessageEvent::NewPeer to do the initial work of connecting
-    broker
-        .send(MessageEvent::NewPeer {
-            name: name.clone(),
-            stream: Arc::clone(&stream),
-            shutdown: shutdown_receiver,
-        })
-        .await
-        .unwrap();
-
-    // Send a welcome message
-    broker
-        .send(MessageEvent::DirectMessage {
-            from: "System".to_string(),
-            to: vec![name.clone()],
-            msg: format!("Welcome {}", &name),
-        })
-        .await
-        .unwrap();
 
     // Now the thread will listen for new incoming messages.
     // The allowed messages are found in the MessageEvent Enum
     while let Some(line) = lines.next().await {
-        // TODO: Make it so the client sends event codes that we understands to match MessageEvent Enums (Same as above but changes needed here)
         let line = line?;
+        let parsed_line: Vec<&str> = line.split("|").collect::<Vec<&str>>();
+        let event_code = parsed_line[0];
+        let target_peer = parsed_line.get(1);
+        let msg = parsed_line.get(2);
+
         // We can do better then this but for now check the msg coming in for commands
-        match line.as_str() {
-            _ if line.starts_with("/") => broker
+        match event_code {
+           "0003" => broker 
                 .send(MessageEvent::CommandRequest {
                     from: name.clone(),
-                    cmd: line[1..].to_string(),
+                    cmd: target_peer.unwrap().to_string(),
                 })
                 .await
                 .unwrap(),
-            _ if line.contains(":") => {
-                let idx = line
-                    .find(':')
-                    .expect("Failed to find `:` which should not be possible");
-                let (dest, msg) = (&line[..idx], line[idx + 1..].trim());
-                let dest: Vec<String> = dest
-                    .split(',')
-                    .map(|name| name.trim().to_string())
-                    .collect();
-                let msg: String = msg.to_string();
+            "0002" => {
                 broker
                     .send(MessageEvent::DirectMessage {
                         from: name.clone(),
-                        to: dest,
-                        msg,
+                        to: vec!(target_peer.unwrap().to_string()),
+                        msg: msg.unwrap().to_string(),
+                    })
+                    .await
+                    .unwrap();
+            }
+            "0001" => { 
+                broker
+                    .send(MessageEvent::GlobalMessage {
+                        name: name.clone(),
+                        msg: msg.unwrap().to_string(),
                     })
                     .await
                     .unwrap();
             }
             _ => {
-                // FIXME: we should handle a case we do not know the command but for now assume global msg was goal
-                broker
-                    .send(MessageEvent::GlobalMessage {
-                        name: name.clone(),
-                        msg: line,
-                    })
-                    .await
-                    .unwrap();
+                println!("Client had an error and is going to be disconnected (should be fixed later");
+                break;
             }
         }
     }

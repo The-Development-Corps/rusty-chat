@@ -5,6 +5,7 @@ use async_std::{
     task,
 };
 use futures::{select, FutureExt};
+use std::process;
 
 // Alias a bunch of things together so we can use a simple `Result`
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -31,14 +32,27 @@ async fn client_loop(addr: impl ToSocketAddrs) -> Result<()> {
                 None => break,
             },
             // Send the outgoing lines to server
-            // TODO: Based on <Something> we should prefix an msg event code so the server knows what is coming in
             line = lines_from_stdin.next().fuse() => match line {
                 Some(line) => {
-                    let line = line?;
-                    if line == "/clear" || line.is_empty() { 
-                        continue; // TODO: implment a clear client window function
+                    let line: String = line?;
+                    // TODO these `event_codes` should load from a file or even cooler SurrealDB *flex* 
+                    // (for no other reason then to load as much cool stuff into a useless app *wink wink*)
+                    match line.as_str() {
+                        _ if line == "/exit" => process::exit(0),
+                        _ if line.starts_with("/t") => {
+                            let parsed_msg: Vec<&str> = line.split_whitespace().collect::<Vec<&str>>();
+                            let name = &parsed_msg[1]; // Arg 0 is going to be the /t
+                            let msg = &parsed_msg[2];
+                            // Format "code|target_peer|msg"
+                            let to_server: String = format!("0002|{}|{}", name, msg);
+                            writer.write_all(to_server.as_bytes()).await?
+                        }
+                        _ if line.eq("/online") => writer.write_all("0003|online".as_bytes()).await?,
+                        _ => {
+                            let to_server = format!("0001|all|{}", line);
+                            writer.write_all(to_server.as_bytes()).await?
+                        }
                     }
-                    writer.write_all(line.as_bytes()).await?;
                     writer.write_all(b"\n").await?;
                 }
                 None => break,
